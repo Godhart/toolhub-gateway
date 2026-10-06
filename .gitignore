@@ -1,1 +1,8 @@
 .*
+
+# Some dot files are necessary
+!.gitignore
+!.gitattributes
+!.editorconfig
+!.dockerignore
+
