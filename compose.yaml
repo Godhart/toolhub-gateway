@@ -1,0 +1,147 @@
+name: toolhub-edge
+services:
+  nginx:
+    build:
+      context: .
+      args:
+        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:stable-alpine}
+    image: toolhub-nginx:0.3.0
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      TOOLHUB_UPSTREAM: ${TOOLHUB_UPSTREAM:?Set TOOLHUB_UPSTREAM in .env}
+      NGINX_ENVSUBST_TEMPLATE_DIR: /opt/toolhub-templates/${NGINX_MODE:-https}
+      NGINX_ENVSUBST_FILTER: ^(DOMAIN|TOOLHUB_UPSTREAM|MCP_PATH)$$
+      MCP_PATH: ${MCP_PATH:-/mcp}
+    ports:
+    - 80:80
+    - 443:443
+    volumes:
+    - ./data/letsencrypt:/etc/letsencrypt:ro
+    - ./data/webroot:/var/www/letsencrypt:ro
+    - ./data/reload:/var/run/certbot-reload:ro
+    networks:
+    - toolhub
+    - oauth
+    healthcheck:
+      test:
+      - CMD
+      - nginx
+      - -t
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+  certbot:
+    build:
+      context: ./certbot
+      args:
+        CERTBOT_IMAGE: ${CERTBOT_IMAGE:-certbot/certbot:latest}
+    image: toolhub-certbot:0.3.0
+    restart: unless-stopped
+    command:
+    - renew-loop
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      EMAIL: ${EMAIL:?Set EMAIL in .env}
+    volumes:
+    - ./data/letsencrypt:/etc/letsencrypt
+    - ./data/webroot:/var/www/letsencrypt
+    - ./data/reload:/var/run/certbot-reload
+    - ./data/certbot-work:/var/lib/letsencrypt
+    - ./data/certbot-logs:/var/log/letsencrypt
+    networks:
+    - acme
+  auth-gate:
+    build:
+      context: ./auth-gate
+    image: toolhub-auth-gate:0.3.0
+    restart: unless-stopped
+    environment:
+      OAUTH_ISSUER: https://${DOMAIN}/auth/realms/toolhub
+      RESOURCE_URL: https://${DOMAIN}${MCP_PATH:-/mcp}
+      JWKS_URL: http://keycloak:8080/auth/realms/toolhub/protocol/openid-connect/certs
+    networks:
+    - oauth
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health',
+        timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  setup:
+    image: toolhub-auth-gate:0.3.0
+    profiles:
+    - tools
+    entrypoint:
+    - python
+    - /app/bootstrap.py
+    environment:
+      DOMAIN: ${DOMAIN}
+      EMAIL: ${EMAIL}
+      MCP_PATH: ${MCP_PATH:-/mcp}
+      OAUTH_REDIRECT_URI: ${OAUTH_REDIRECT_URI:-https://chatgpt.com/connector_platform_oauth_redirect}
+      TOOLHUB_USERNAME: ${TOOLHUB_USERNAME:-toolhub-user}
+    volumes:
+    - ./config:/config
+    - ./data/keycloak-import:/realm-import
+    network_mode: none
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    env_file:
+    - path: ./config/postgres.env
+      required: false
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+    volumes:
+    - ./data/postgres:/var/lib/postgresql/data
+    networks:
+    - database
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U keycloak -d keycloak
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4
+    restart: unless-stopped
+    command:
+    - start
+    - --import-realm
+    env_file:
+    - path: ./config/keycloak.env
+      required: false
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_HOSTNAME: https://${DOMAIN}/auth
+      KC_HTTP_ENABLED: 'true'
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_PROXY_HEADERS: xforwarded
+      KC_FEATURES: resource-indicators
+    volumes:
+    - ./data/keycloak-import:/opt/keycloak/data/import:ro
+    networks:
+    - oauth
+    - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+networks:
+  toolhub:
+    external: true
+    name: ${TOOLHUB_NETWORK:-toolhub-edge}
+  acme: {}
+  oauth:
+    internal: true
+  database:
+    internal: true

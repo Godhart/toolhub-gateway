@@ -1,8 +1,6 @@
-.*
-
-# Some dot files are necessary
-!.gitignore
-!.gitattributes
-!.editorconfig
-!.dockerignore
+.env
+config/
+data/
+__pycache__/
+*.pyc
 

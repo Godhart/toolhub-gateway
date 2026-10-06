@@ -1,1 +1,7 @@
 *
+!Dockerfile
+!templates/
+!templates/**
+
+!scripts/
+!scripts/30-certificate-watcher.sh
